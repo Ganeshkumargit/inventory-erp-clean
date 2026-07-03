@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import axios from "axios";
+import api from "../api/axios";
 
 function Login() {
   const [email, setEmail] = useState("admin@gmail.com");
@@ -13,7 +13,7 @@ function Login() {
     e.preventDefault();
 
     try {
-      const res = await axios.post("http://localhost:5000/api/auth/login", {
+      const res = await api.post("/auth/login", {
         email,
         password,
       });
@@ -67,7 +67,6 @@ function Login() {
                 </button>
               </form>
             </div>
-
           </div>
         </div>
       </div>
