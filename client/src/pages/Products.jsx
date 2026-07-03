@@ -50,7 +50,7 @@ function Products() {
       render: (row) =>
         row.image_path ? (
           <img
-            src={`${API_URL}${row.image_path}`}
+           src={row.image_path}
             alt={row.product_name}
             style={{
               width: "60px",
@@ -158,11 +158,11 @@ function Products() {
 
     setOldImagePath(product.image_path || "");
 
-    if (product.image_path) {
-      setPreview(`${API_URL}${product.image_path}`);
-    } else {
-      setPreview("");
-    }
+if (product.image_path) {
+  setPreview(product.image_path);
+} else {
+  setPreview("");
+}
 
     setImage(null);
   };

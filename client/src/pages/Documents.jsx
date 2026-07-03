@@ -143,7 +143,6 @@ function Documents() {
               >
                 <option value="LOCAL">Local Storage</option>
                 <option value="AWS_S3">AWS S3</option>
-                <option value="GOOGLE_CLOUD">Google Cloud Storage</option>
               </select>
             </div>
 

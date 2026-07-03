@@ -1,17 +1,51 @@
 const pool = require("../config/db");
+const s3 = require("../config/s3");
+
+const {
+  PutObjectCommand,
+  DeleteObjectCommand,
+  GetObjectCommand,
+} = require("@aws-sdk/client-s3");
+
+const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 
 const addProduct = async (req, res) => {
   try {
     const { category_id, product_name, description, price, stock_qty } = req.body;
 
-    const image_path = req.file ? `/uploads/products/${req.file.filename}` : null;
+    let image_path = null;
+    let image_s3_key = null;
+
+    if (req.file) {
+      const s3Key = `products/${Date.now()}-${req.file.originalname}`;
+
+      await s3.send(
+        new PutObjectCommand({
+          Bucket: process.env.AWS_BUCKET_NAME,
+          Key: s3Key,
+          Body: req.file.buffer,
+          ContentType: req.file.mimetype,
+        })
+      );
+
+      image_s3_key = s3Key;
+      image_path = s3Key;
+    }
 
     const result = await pool.query(
       `INSERT INTO products
-       (category_id, product_name, description, price, stock_qty, image_path)
-       VALUES ($1, $2, $3, $4, $5, $6)
+       (category_id, product_name, description, price, stock_qty, image_path, image_s3_key)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING *`,
-      [category_id, product_name, description, price, stock_qty || 0, image_path]
+      [
+        category_id,
+        product_name,
+        description,
+        price,
+        stock_qty || 0,
+        image_path,
+        image_s3_key,
+      ]
     );
 
     res.status(201).json({
@@ -38,6 +72,7 @@ const getProducts = async (req, res) => {
           p.price,
           p.stock_qty,
           p.image_path,
+          p.image_s3_key,
           p.created_at
        FROM products p
        LEFT JOIN categories c ON c.category_id = p.category_id
@@ -45,7 +80,24 @@ const getProducts = async (req, res) => {
        ORDER BY p.product_id DESC`
     );
 
-    res.json(result.rows);
+    const products = await Promise.all(
+      result.rows.map(async (product) => {
+        if (product.image_s3_key) {
+          const command = new GetObjectCommand({
+            Bucket: process.env.AWS_BUCKET_NAME,
+            Key: product.image_s3_key,
+          });
+
+          product.image_path = await getSignedUrl(s3, command, {
+            expiresIn: 60 * 5,
+          });
+        }
+
+        return product;
+      })
+    );
+
+    res.json(products);
   } catch (error) {
     res.status(500).json({
       message: "Failed to fetch products",
@@ -71,7 +123,20 @@ const getProductById = async (req, res) => {
       });
     }
 
-    res.json(result.rows[0]);
+    const product = result.rows[0];
+
+    if (product.image_s3_key) {
+      const command = new GetObjectCommand({
+        Bucket: process.env.AWS_BUCKET_NAME,
+        Key: product.image_s3_key,
+      });
+
+      product.image_path = await getSignedUrl(s3, command, {
+        expiresIn: 60 * 5,
+      });
+    }
+
+    res.json(product);
   } catch (error) {
     res.status(500).json({
       message: "Failed to fetch product",
@@ -85,10 +150,45 @@ const updateProduct = async (req, res) => {
     const { id } = req.params;
     const { category_id, product_name, description, price, stock_qty } = req.body;
 
-    let image_path = req.body.old_image_path || null;
+    const existingResult = await pool.query(
+      `SELECT image_s3_key
+       FROM products
+       WHERE product_id = $1 AND status = 1`,
+      [id]
+    );
+
+    if (existingResult.rows.length === 0) {
+      return res.status(404).json({
+        message: "Product not found",
+      });
+    }
+
+    let image_s3_key = existingResult.rows[0].image_s3_key || null;
+    let image_path = image_s3_key;
 
     if (req.file) {
-      image_path = `/uploads/products/${req.file.filename}`;
+      if (image_s3_key) {
+        await s3.send(
+          new DeleteObjectCommand({
+            Bucket: process.env.AWS_BUCKET_NAME,
+            Key: image_s3_key,
+          })
+        );
+      }
+
+      const s3Key = `products/${Date.now()}-${req.file.originalname}`;
+
+      await s3.send(
+        new PutObjectCommand({
+          Bucket: process.env.AWS_BUCKET_NAME,
+          Key: s3Key,
+          Body: req.file.buffer,
+          ContentType: req.file.mimetype,
+        })
+      );
+
+      image_s3_key = s3Key;
+      image_path = s3Key;
     }
 
     const result = await pool.query(
@@ -98,17 +198,21 @@ const updateProduct = async (req, res) => {
            description = $3,
            price = $4,
            stock_qty = $5,
-           image_path = $6
-       WHERE product_id = $7 AND status = 1
+           image_path = $6,
+           image_s3_key = $7
+       WHERE product_id = $8 AND status = 1
        RETURNING *`,
-      [category_id, product_name, description, price, stock_qty || 0, image_path, id]
+      [
+        category_id,
+        product_name,
+        description,
+        price,
+        stock_qty || 0,
+        image_path,
+        image_s3_key,
+        id,
+      ]
     );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({
-        message: "Product not found",
-      });
-    }
 
     res.json({
       message: "Product updated successfully",
@@ -126,19 +230,36 @@ const deleteProduct = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const result = await pool.query(
-      `UPDATE products
-       SET status = 0
-       WHERE product_id = $1 AND status = 1
-       RETURNING *`,
+    const existingResult = await pool.query(
+      `SELECT image_s3_key
+       FROM products
+       WHERE product_id = $1 AND status = 1`,
       [id]
     );
 
-    if (result.rows.length === 0) {
+    if (existingResult.rows.length === 0) {
       return res.status(404).json({
         message: "Product not found",
       });
     }
+
+    const image_s3_key = existingResult.rows[0].image_s3_key;
+
+    if (image_s3_key) {
+      await s3.send(
+        new DeleteObjectCommand({
+          Bucket: process.env.AWS_BUCKET_NAME,
+          Key: image_s3_key,
+        })
+      );
+    }
+
+    await pool.query(
+      `UPDATE products
+       SET status = 0
+       WHERE product_id = $1 AND status = 1`,
+      [id]
+    );
 
     res.json({
       message: "Product deleted successfully",
