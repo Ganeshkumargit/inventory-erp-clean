@@ -1,3 +1,5 @@
+import EmptyState from "./EmptyState";
+
 function DataTable({ columns, data, renderActions, emptyMessage = "No records found" }) {
   return (
     <div className="card shadow">
@@ -30,16 +32,14 @@ function DataTable({ columns, data, renderActions, emptyMessage = "No records fo
               </tr>
             ))}
 
+
             {data.length === 0 && (
-              <tr>
-                <td
-                  colSpan={columns.length + (renderActions ? 2 : 1)}
-                  className="text-center"
-                >
-                  {emptyMessage}
-                </td>
-              </tr>
-            )}
+  <tr>
+    <td colSpan={columns.length + (renderActions ? 2 : 1)}>
+      <EmptyState message={emptyMessage} />
+    </td>
+  </tr>
+)}
           </tbody>
         </table>
       </div>
